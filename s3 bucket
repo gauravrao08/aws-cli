@@ -1,0 +1,7 @@
+copy data from s3 bucket to another s3 bucket
+
+use "dryrun" to check the output where it will copy
+
+```
+aws s3 sync s3://fca-jeep/prod/stock_image s3://fca-jeep-prod/prod/stock_image --dryrun
+```
