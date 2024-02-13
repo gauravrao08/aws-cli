@@ -1,0 +1,111 @@
+{
+  "Comment": "State machine for conversion of files from avro to json",
+  "StartAt": "ListObjectsV2 (Inital)",
+  "States": {
+    "ListObjectsV2 (Inital)": {
+      "Type": "Task",
+      "Next": "Map",
+      "Parameters": {
+        "Bucket": "s3-bcuket-name",
+        "Prefix": "topics/pc-src.gtn.event.shipment_order/year=2024/month=01/day=01"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:s3:listObjectsV2"
+    },
+    "ListObjectsV2 (Pagination)": {
+      "Type": "Task",
+      "Parameters": {
+        "Bucket": "pc-src-pro",
+        "ContinuationToken.$": "$.NextContinuationToken",
+        "Prefix": "topics/pc-src.gtn.event.shipment_order/year=2024/month=01/day=01"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:s3:listObjectsV2",
+      "Next": "Map"
+    },
+    "Map": {
+      "Type": "Map",
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "DISTRIBUTED",
+          "ExecutionType": "STANDARD"
+        },
+        "StartAt": "Lambda Invoke",
+        "States": {
+          "Lambda Invoke": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "OutputPath": "$.Payload",
+            "Parameters": {
+              "Payload.$": "$",
+              "FunctionName": "arn:aws:lambda:eu-central-1:XXXXXXXXXXXX:function:convert-avro-to-json:$LATEST"
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 1,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Next": "Successful conversion?"
+          },
+          "Successful conversion?": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.statusCode",
+                "NumericEquals": 200,
+                "Next": "SQS SendMessage (Successful)",
+                "Comment": "Success"
+              }
+            ],
+            "Default": "SQS SendMessage (Failed)"
+          },
+          "SQS SendMessage (Successful)": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sqs:sendMessage",
+            "Parameters": {
+              "MessageBody.$": "$",
+              "QueueUrl": "https://sqs.eu-central-1.amazonaws.com/XXXXXXXXX/jsontoavrosuccess"
+            },
+            "End": true
+          },
+          "SQS SendMessage (Failed)": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sqs:sendMessage",
+            "Parameters": {
+              "MessageBody.$": "$",
+              "QueueUrl": "https://sqs.eu-central-1.amazonaws.com/XXXXXXXXX/jsontoavrofailed"
+            },
+            "End": true
+          }
+        }
+      },
+      "Label": "Map",
+      "MaxConcurrency": 100,
+      "ToleratedFailurePercentage": 100,
+      "ItemsPath": "$.Contents",
+      "Next": "More items to process?",
+      "ResultPath": null
+    },
+    "More items to process?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.NextContinuationToken",
+          "IsPresent": true,
+          "Next": "ListObjectsV2 (Pagination)",
+          "Comment": "More items"
+        }
+      ],
+      "Default": "Success"
+    },
+    "Success": {
+      "Type": "Succeed"
+    }
+  }
+}
